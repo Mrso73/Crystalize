@@ -1,2 +1,2 @@
 # Crystalize
-Generative art program with multiple algorithms
+Generative art program to create images using multiple algorithms
