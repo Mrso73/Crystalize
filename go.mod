@@ -1,3 +1,4 @@
-module example.com/crystalize
+module github.com/Mrso73/Crystalize
 
-go 1.22.0
+go 1.23
+
