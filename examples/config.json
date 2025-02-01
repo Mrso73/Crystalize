@@ -1,14 +1,12 @@
 {
-
-
-    "minRectSize": 10,
-    "maxRectSize": 50,
-    "iterations": 2000,
-    "alphaMin": 20,
-    "alphaMax": 150,
-    "blendingFactor": 0.7,
-    "colorVariation": 15,
-    "borderEnabled": true,
+    "minRectSize": 3,
+    "maxRectSize": 12,
+    "iterations": 1000,
+    "alphaMin": 10,
+    "alphaMax": 100,
+    "blendingFactor": 0.8,
+    "colorVariation": 0,
+    "borderEnabled": false,
     "borderColor": [15, 15, 15],
     "borderThickness": 1
-  }
+}

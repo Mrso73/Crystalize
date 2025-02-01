@@ -1,165 +1,181 @@
 package generator
 
 import (
-    "image"
-    "image/color"
-    "image/draw"
-    "math"
-    "math/rand"
-    "time"
-    
-    "github.com/Mrso73/Crystalize/internal/config"
+	"image"
+	"image/color"
+	"image/draw"
+	"math"
+	"math/rand"
+	"time"
+
+	"github.com/Mrso73/Crystalize/internal/config"
 )
 
 type Generator struct {
-    cfg      *config.ArtConfig
-    original image.Image
-    current  *image.RGBA
-    rng      *rand.Rand
+	cfg      *config.ArtConfig
+	original image.Image
+	current  *image.RGBA
+	rng      *rand.Rand
+	bounds   image.Rectangle
 }
 
 func NewGenerator(cfg *config.ArtConfig, img image.Image) *Generator {
-    bounds := img.Bounds()
-    current := image.NewRGBA(bounds)
-    draw.Draw(current, bounds, image.NewUniform(color.White), image.Point{}, draw.Src)
-    return &Generator{
-        cfg:      cfg,
-        original: img,
-        current:  current,
-        rng:      rand.New(rand.NewSource(time.Now().UnixNano())),
-    }
+	bounds := img.Bounds()
+	current := image.NewRGBA(bounds)
+
+	// Initialize with average color of original image instead of white
+	avgColor := calculateImageAverage(img)
+	draw.Draw(current, bounds, &image.Uniform{avgColor}, image.Point{}, draw.Src)
+
+	return &Generator{
+		cfg:      cfg,
+		original: img,
+		current:  current,
+		rng:      rand.New(rand.NewSource(time.Now().UnixNano())),
+		bounds:   bounds,
+	}
+}
+
+// Calculate average color of entire image for better initial state
+func calculateImageAverage(img image.Image) color.RGBA {
+	bounds := img.Bounds()
+	var rSum, gSum, bSum int64
+	count := 0
+
+	for y := bounds.Min.Y; y < bounds.Max.Y; y++ {
+		for x := bounds.Min.X; x < bounds.Max.X; x++ {
+			r, g, b, _ := img.At(x, y).RGBA()
+			rSum += int64(r)
+			gSum += int64(g)
+			bSum += int64(b)
+			count++
+		}
+	}
+
+	return color.RGBA{
+		R: uint8((rSum / int64(count)) >> 8),
+		G: uint8((gSum / int64(count)) >> 8),
+		B: uint8((bSum / int64(count)) >> 8),
+		A: 255,
+	}
 }
 
 func (g *Generator) Generate(progress chan<- float32) {
-    defer close(progress)
-    for i := 0; i < g.cfg.Iterations; i++ {
-        rect, rectColor := g.createRectangle()
-        g.drawRectangle(rect, rectColor)
-        progress <- float32(i+1)/float32(g.cfg.Iterations)
-    }
+	defer close(progress)
+
+	for i := 0; i < g.cfg.Iterations; i++ {
+		rect, rectColor := g.createRectangle()
+		g.drawRectangle(rect, rectColor)
+		progress <- float32(i+1) / float32(g.cfg.Iterations)
+	}
 }
 
 func (g *Generator) createRectangle() (image.Rectangle, color.RGBA) {
-    // Random rectangle size with config constraints
-    size := g.rng.Intn(g.cfg.MaxRectSize - g.cfg.MinRectSize + 1) + g.cfg.MinRectSize
-    
-    // Ensure rectangle stays within image bounds
-    maxX := g.original.Bounds().Max.X - size
-    maxY := g.original.Bounds().Max.Y - size
-    x := g.rng.Intn(maxX)
-    y := g.rng.Intn(maxY)
-    
-    rect := image.Rect(x, y, x+size, y+size)
-    avgColor := g.sampleAverageColor(rect)
-    
-    // Apply color variation
-    avgColor.R = g.applyVariation(avgColor.R)
-    avgColor.G = g.applyVariation(avgColor.G)
-    avgColor.B = g.applyVariation(avgColor.B)
-    
-    // Calculate alpha with blending factor
-    alphaBase := uint8(g.rng.Intn(int(g.cfg.AlphaMax-g.cfg.AlphaMin+1))) + g.cfg.AlphaMin
-    alpha := uint8(float32(alphaBase) * g.cfg.BlendingFactor)
-    alpha = uint8(math.Max(float64(g.cfg.AlphaMin), math.Min(float64(g.cfg.AlphaMax), float64(alpha))))
-    
-    return rect, color.RGBA{
-        R: avgColor.R,
-        G: avgColor.G,
-        B: avgColor.B,
-        A: alpha,
-    }
+	// Use smaller rectangles for better detail
+	size := g.cfg.MinRectSize +
+		g.rng.Intn(g.cfg.MaxRectSize-g.cfg.MinRectSize+1)
+
+	// Get position using color difference sampling
+	x, y := g.findBestPosition(size)
+	rect := image.Rect(x, y, x+size, y+size)
+
+	// Get color with strict adherence to original
+	avgColor := g.sampleStrictColor(rect)
+
+	return rect, avgColor
 }
 
-func (g *Generator) applyVariation(base uint8) uint8 {
-    variation := int(g.rng.Intn(int(g.cfg.ColorVariation)*2+1)) - int(g.cfg.ColorVariation)
-    newVal := int(base) + variation
-    return uint8(math.Max(0, math.Min(255, float64(newVal))))
+func (g *Generator) findBestPosition(size int) (int, int) {
+	bounds := g.original.Bounds()
+	maxX := bounds.Max.X - size
+	maxY := bounds.Max.Y - size
+
+	// Try a few positions and pick the one with highest color difference
+	bestDiff := -1.0
+	bestX, bestY := 0, 0
+
+	for i := 0; i < 10; i++ {
+		x := g.rng.Intn(maxX)
+		y := g.rng.Intn(maxY)
+
+		diff := g.calculateColorDifference(image.Rect(x, y, x+size, y+size))
+		if diff > bestDiff {
+			bestDiff = diff
+			bestX = x
+			bestY = y
+		}
+	}
+
+	return bestX, bestY
 }
 
-func (g *Generator) sampleAverageColor(rect image.Rectangle) color.RGBA {
-    var rSum, gSum, bSum uint32 // Changed variable names
-    count := 0
-    for y := rect.Min.Y; y < rect.Max.Y; y++ {
-        for x := rect.Min.X; x < rect.Max.X; x++ {
-            pr, pg, pb, _ := g.original.At(x, y).RGBA() // Now correctly references Generator
-            rSum += pr >> 8
-            gSum += pg >> 8  // Now using gSum instead of g
-            bSum += pb >> 8
-            count++
-        }
-    }
-    return color.RGBA{
-        R: uint8(rSum / uint32(count)),
-        G: uint8(gSum / uint32(count)),  // Fixed reference
-        B: uint8(bSum / uint32(count)),
-        A: 255,
-    }
+func (g *Generator) calculateColorDifference(rect image.Rectangle) float64 {
+	origColor := g.sampleStrictColor(rect)
+	currColor := g.sampleCurrentColor(rect)
+
+	rDiff := float64(origColor.R) - float64(currColor.R)
+	gDiff := float64(origColor.G) - float64(currColor.G)
+	bDiff := float64(origColor.B) - float64(currColor.B)
+
+	return math.Abs(rDiff) + math.Abs(gDiff) + math.Abs(bDiff)
+}
+
+func (g *Generator) sampleCurrentColor(rect image.Rectangle) color.RGBA {
+	var rSum, gSum, bSum int64
+	count := 0
+
+	for y := rect.Min.Y; y < rect.Max.Y; y++ {
+		for x := rect.Min.X; x < rect.Max.X; x++ {
+			c := g.current.RGBAAt(x, y)
+			rSum += int64(c.R)
+			gSum += int64(c.G)
+			bSum += int64(c.B)
+			count++
+		}
+	}
+
+	return color.RGBA{
+		R: uint8(rSum / int64(count)),
+		G: uint8(gSum / int64(count)),
+		B: uint8(bSum / int64(count)),
+		A: 255,
+	}
+}
+
+func (g *Generator) sampleStrictColor(rect image.Rectangle) color.RGBA {
+	var rSum, gSum, bSum uint64
+	count := 0
+
+	for y := rect.Min.Y; y < rect.Max.Y; y++ {
+		for x := rect.Min.X; x < rect.Max.X; x++ {
+			r, g, b, _ := g.original.At(x, y).RGBA()
+			rSum += uint64(r)
+			gSum += uint64(g)
+			bSum += uint64(b)
+			count++
+		}
+	}
+
+	alpha := uint8(float64(g.cfg.AlphaMin) * float64(g.cfg.BlendingFactor))
+
+	return color.RGBA{
+		R: uint8((rSum / uint64(count)) >> 8),
+		G: uint8((gSum / uint64(count)) >> 8),
+		B: uint8((bSum / uint64(count)) >> 8),
+		A: alpha,
+	}
 }
 
 func (g *Generator) drawRectangle(rect image.Rectangle, c color.RGBA) {
-    // Draw semi-transparent rectangle
-    draw.Draw(
-        g.current,
-        rect,
-        &image.Uniform{c},
-        image.Point{},
-        draw.Over,
-    )
-    
-    // Draw border if enabled
-    if g.cfg.BorderEnabled {
-        borderColor := color.RGBA{
-            R: g.cfg.BorderColor[0],
-            G: g.cfg.BorderColor[1],
-            B: g.cfg.BorderColor[2],
-            A: 255,
-        }
-        drawBorder(g.current, rect, borderColor, g.cfg.BorderThickness)
-    }
-}
-
-func drawBorder(img *image.RGBA, rect image.Rectangle, c color.RGBA, thickness int) {
-    if thickness <= 0 {
-        return
-    }
-    
-    // Top border
-    top := image.Rect(
-        rect.Min.X,
-        rect.Min.Y,
-        rect.Max.X,
-        rect.Min.Y+thickness,
-    )
-    draw.Draw(img, top, &image.Uniform{c}, image.Point{}, draw.Over)
-    
-    // Bottom border
-    bottom := image.Rect(
-        rect.Min.X,
-        rect.Max.Y-thickness,
-        rect.Max.X,
-        rect.Max.Y,
-    )
-    draw.Draw(img, bottom, &image.Uniform{c}, image.Point{}, draw.Over)
-    
-    // Left border
-    left := image.Rect(
-        rect.Min.X,
-        rect.Min.Y,
-        rect.Min.X+thickness,
-        rect.Max.Y,
-    )
-    draw.Draw(img, left, &image.Uniform{c}, image.Point{}, draw.Over)
-    
-    // Right border
-    right := image.Rect(
-        rect.Max.X-thickness,
-        rect.Min.Y,
-        rect.Max.X,
-        rect.Max.Y,
-    )
-    draw.Draw(img, right, &image.Uniform{c}, image.Point{}, draw.Over)
+	draw.Draw(
+		g.current,
+		rect,
+		&image.Uniform{c},
+		image.Point{},
+		draw.Over,
+	)
 }
 
 func (g *Generator) Result() image.Image {
-    return g.current
+	return g.current
 }
