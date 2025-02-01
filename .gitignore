@@ -1,0 +1,32 @@
+# Standard Go .gitignore
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+/bin/
+/dist/
+/cover/
+go.work
+
+# Project-specific ignores
+/examples/art.png
+*.log
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Dependency directories
+vendor/
+
+# Development environment files
+.env
+.env.local
